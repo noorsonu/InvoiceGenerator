@@ -31,9 +31,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @RestController
@@ -95,19 +95,25 @@ public class InvoiceController {
 
 		double tax = request.getTax() != null ? request.getTax() : 0.0;
 		double discount = request.getDiscount() != null ? request.getDiscount() : 0.0;
-		double otherCharges = request.getOtherCharges() != null ? request.getOtherCharges() : 0.0;
-		double totalAmount = subTotal + tax + otherCharges - discount;
+        double otherCharges = request.getOtherCharges() != null ? request.getOtherCharges() : 0.0;
+        double totalAmount = subTotal + tax + otherCharges - discount;
 
-		Invoice invoice = new Invoice();
-		invoice.setSupplier(supplier);
-		invoice.setInvoiceDate(LocalDateTime.now());
-		invoice.setStatus("PAID");
-		invoice.setPaymentMethod(request.getPaymentMethod());
-		invoice.setSubTotal(subTotal);
-		invoice.setTax(tax);
-		invoice.setDiscount(discount);
-		invoice.setOtherCharges(otherCharges);
-		invoice.setTotalAmount(totalAmount);
+        Invoice invoice = new Invoice();
+        invoice.setSupplier(supplier);
+        invoice.setInvoiceDate(LocalDateTime.now());
+        invoice.setStatus("PAID");
+        invoice.setPaymentMethod(request.getPaymentMethod());
+
+        // Copy customer details from the request so they appear on the PDF
+        invoice.setCustomerName(request.getCustomerName());
+        invoice.setPhoneNumber(request.getPhoneNumber());
+        invoice.setAddress(request.getAddress());
+
+        invoice.setSubTotal(subTotal);
+        invoice.setTax(tax);
+        invoice.setDiscount(discount);
+        invoice.setOtherCharges(otherCharges);
+        invoice.setTotalAmount(totalAmount);
 
 		String invoiceNumber = "INV-" + System.currentTimeMillis();
 		invoice.setInvoiceNumber(invoiceNumber);
@@ -122,8 +128,9 @@ public class InvoiceController {
 		InvoiceDto dto = toDto(saved);
 		byte[] pdfBytes = pdfGeneratorService.generateInvoicePdf(dto);
 
+		String filename = buildInvoiceFilename(saved);
 		return ResponseEntity.ok().header("Content-Type", "application/pdf")
-				.header("Content-Disposition", "attachment; filename=" + saved.getInvoiceNumber() + ".pdf")
+				.header("Content-Disposition", "attachment; filename=" + filename)
 				.body(pdfBytes);
 	}
 
@@ -144,19 +151,47 @@ public class InvoiceController {
 		InvoiceDto dto = toDto(invoice);
 		byte[] pdfBytes = pdfGeneratorService.generateInvoicePdf(dto);
 
+		String filename = buildInvoiceFilename(invoice);
 		return ResponseEntity.ok().header("Content-Type", "application/pdf")
-				.header("Content-Disposition", "attachment; filename=" + invoice.getInvoiceNumber() + ".pdf")
+				.header("Content-Disposition", "attachment; filename=" + filename)
 				.body(pdfBytes);
 	}
 
     private InvoiceDto toDto(Invoice invoice) {
         InvoiceDto dto = new InvoiceDto();
+
+        // Supplier details
         if (invoice.getSupplier() != null) {
             dto.setSupplierName(invoice.getSupplier().getName());
+        }
+
+        // Prefer customer details saved on the invoice; fall back to supplier for old data
+        if (invoice.getCustomerName() != null && !invoice.getCustomerName().isBlank()) {
+            dto.setCustomerName(invoice.getCustomerName());
+        } else if (invoice.getSupplier() != null) {
             dto.setCustomerName(invoice.getSupplier().getName());
+        }
+
+        if (invoice.getPhoneNumber() != null && !invoice.getPhoneNumber().isBlank()) {
+            dto.setPhoneNumber(invoice.getPhoneNumber());
+        } else if (invoice.getSupplier() != null) {
             dto.setPhoneNumber(invoice.getSupplier().getPhoneNumber());
+        }
+
+        if (invoice.getAddress() != null && !invoice.getAddress().isBlank()) {
+            dto.setAddress(invoice.getAddress());
+        } else if (invoice.getSupplier() != null) {
             dto.setAddress(invoice.getSupplier().getAddress());
         }
+
+        // Invoice meta
+        dto.setInvoiceNumber(invoice.getInvoiceNumber());
+        dto.setStatus(invoice.getStatus());
+        if (invoice.getInvoiceDate() != null) {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd MMM, yyyy hh:mm a");
+            dto.setInvoiceDateTime(invoice.getInvoiceDate().format(formatter));
+        }
+
         dto.setPaymentMethod(invoice.getPaymentMethod());
 		dto.setTax(String.format("%.2f", invoice.getTax() != null ? invoice.getTax() : 0.0));
 		dto.setDiscount(String.format("%.2f", invoice.getDiscount() != null ? invoice.getDiscount() : 0.0));
@@ -165,7 +200,8 @@ public class InvoiceController {
 		dto.setAmount(String.format("%.2f", invoice.getTotalAmount() != null ? invoice.getTotalAmount() : 0.0));
 
 		List<InvoiceItemDto> itemDtos = invoice.getItems().stream()
-				.map(item -> new InvoiceItemDto(item.getProduct() != null ? item.getProduct().getProductName() : "",
+				.map(item -> new InvoiceItemDto(
+						item.getProduct() != null ? item.getProduct().getProductName() : "",
 						String.format("%.2f", item.getUnitPrice() != null ? item.getUnitPrice() : 0.0),
 						String.valueOf(item.getQuantity() != null ? item.getQuantity() : 0),
 						String.format("%.2f", item.getLineTotal() != null ? item.getLineTotal() : 0.0)))
@@ -173,5 +209,27 @@ public class InvoiceController {
 
 		dto.setItems(itemDtos);
 		return dto;
+	}
+
+	private String buildInvoiceFilename(Invoice invoice) {
+		// Prefer the customer name saved on the invoice; fall back to supplier name if missing
+		String customerName = null;
+		if (invoice.getCustomerName() != null && !invoice.getCustomerName().isBlank()) {
+			customerName = invoice.getCustomerName();
+		} else if (invoice.getSupplier() != null && invoice.getSupplier().getName() != null) {
+			customerName = invoice.getSupplier().getName();
+		} else {
+			customerName = "customer";
+		}
+
+		customerName = customerName.trim()
+				.replace(" ", "_")
+				.replace("/", "_")
+				.replace("\\", "_");
+
+		double total = invoice.getTotalAmount() != null ? invoice.getTotalAmount() : 0.0;
+		String totalStr = String.format("%.2f", total);
+
+		return customerName + "_" + totalStr + ".pdf";
 	}
 }

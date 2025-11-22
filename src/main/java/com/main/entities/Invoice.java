@@ -37,6 +37,12 @@ public class Invoice {
 
     private String paymentMethod;
 
-    @OneToMany(mappedBy = "invoice", cascade = CascadeType.ALL, orphanRemoval = true)
+    // Customer details captured on the invoice
+    private String customerName;
+    private String phoneNumber;
+    private String address;
+
+    // Load items eagerly to avoid LazyInitializationException when mapping to DTOs
+    @OneToMany(mappedBy = "invoice", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     private List<InvoiceItem> items = new ArrayList<>();
 }

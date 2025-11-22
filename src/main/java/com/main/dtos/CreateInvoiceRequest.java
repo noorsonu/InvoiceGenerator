@@ -17,6 +17,16 @@ public class CreateInvoiceRequest {
     @NotNull(message = "Supplier id is required")
     private Long supplierId;
 
+    // Customer details entered at invoice creation time
+    @NotBlank(message = "Customer name is required")
+    private String customerName;
+
+    @NotBlank(message = "Customer phone number is required")
+    private String phoneNumber;
+
+    @NotBlank(message = "Customer address is required")
+    private String address;
+
     @NotNull(message = "Items are required")
     private List<InvoiceItemRequest> items;
 
